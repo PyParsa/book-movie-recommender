@@ -1,114 +1,218 @@
-import streamlit as st
-import requests
-import random
+# ==========================================================
+# 🎬 Book & Movie Recommender App (Final Hybrid Version)
+# Designed by Parsa | UX + Python + Streamlit 💜
+# ==========================================================
+
 import os
+import re
+import random
+import requests
+import streamlit as st
+from dotenv import load_dotenv
 
-# ========== Load API keys from Streamlit secrets ==========
-TMDB_API_KEY = st.secrets.get("TMDB_API_KEY", "")
-GOOGLE_BOOKS_API_KEY = st.secrets.get("GOOGLE_BOOKS_API_KEY", "")
+# ----------------------------------------------------------
+# 🔐 LOAD ENVIRONMENT VARIABLES
+# ----------------------------------------------------------
+load_dotenv()
+TMDB_API_KEY = os.getenv("TMDB_API_KEY")
+GOOGLE_BOOKS_API_KEY = os.getenv("GOOGLE_BOOKS_API_KEY")
 
-# ========== Streamlit Page Setup ==========
-st.set_page_config(page_title="Book & Movie Recommender", page_icon="🎬", layout="centered")
+# ----------------------------------------------------------
+# ⚙️ STREAMLIT CONFIG
+# ----------------------------------------------------------
+st.set_page_config(page_title="Real Book & Movie Recommender", page_icon="🎬", layout="centered")
 
-st.markdown(
-    """
-    <style>
-    .recommend-box {
-        background-color: #4a4e69;
-        color: white;
-        padding: 14px;
-        margin-top: 10px;
-        border-radius: 10px;
-        text-align: center;
-        font-weight: 600;
+if "dark_mode" not in st.session_state:
+    st.session_state.dark_mode = True
+
+def palette():
+    if st.session_state.dark_mode:
+        return {"bg":"#1E1E26","card":"#2E2E36","text":"#F2E9E4","border":"#9A8C98"}
+    return {"bg":"#F2E9E4","card":"#FFFFFF","text":"#22223B","border":"#4A4E69"}
+
+C = palette()
+
+# ----------------------------------------------------------
+# 🎨 CUSTOM CSS STYLING
+# ----------------------------------------------------------
+st.markdown(f"""
+<style>
+  .main {{
+    background:{C['bg']};
+    color:{C['text']};
+    font-family: 'Inter', sans-serif;
+  }}
+  .stButton>button {{
+    background:#4A4E69;
+    color:white;
+    border:none;
+    border-radius:10px;
+    padding:10px 18px;
+    font-weight:600;
+  }}
+  .stButton>button:hover {{
+    background:#9A8C98;
+    color:{C['bg']};
+  }}
+  .card {{
+    background:{C['card']};
+    color:{C['text']};
+    border:2px solid {C['border']};
+    border-radius:12px;
+    padding:12px;
+    margin-top:10px;
+    text-align:center;
+    font-weight:600;
+    transition:all .25s ease;
+  }}
+  .card:hover {{
+    transform:scale(1.02);
+    background:{("#38384B" if st.session_state.dark_mode else "#E9E4EF")};
+  }}
+</style>
+""", unsafe_allow_html=True)
+
+# ----------------------------------------------------------
+# 🧭 HEADER
+# ----------------------------------------------------------
+c1, c2 = st.columns([6,1])
+with c1:
+    st.title("🎬 Real Book & Movie Recommender")
+    st.caption("Powered by TMDB & Google Books APIs")
+with c2:
+    if st.button("🌙" if st.session_state.dark_mode else "☀️"):
+        st.session_state.dark_mode = not st.session_state.dark_mode
+
+# ----------------------------------------------------------
+# 🔧 HELPER FUNCTIONS
+# ----------------------------------------------------------
+@st.cache_data(ttl=60*60)
+def get_tmdb_genres():
+    url = f"https://api.themoviedb.org/3/genre/movie/list"
+    params = {"api_key": TMDB_API_KEY, "language": "en-US"}
+    r = requests.get(url, params=params, timeout=15)
+    r.raise_for_status()
+    genres = r.json().get("genres", [])
+    id_by_name = {g["name"]: g["id"] for g in genres}
+    names_sorted = sorted(id_by_name.keys())
+    return id_by_name, names_sorted
+
+@st.cache_data(ttl=60*10)
+def discover_movies(genre_id: int, year: int, page: int = 1):
+    url = "https://api.themoviedb.org/3/discover/movie"
+    params = {
+        "api_key": TMDB_API_KEY,
+        "with_genres": genre_id,
+        "primary_release_year": year,
+        "language": "en-US",
+        "sort_by": "popularity.desc",
+        "page": page,
+        "include_adult": False,
     }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+    r = requests.get(url, params=params, timeout=15)
+    r.raise_for_status()
+    return r.json().get("results", [])
 
-# ========== Header ==========
-st.title("🎬📚 Book & Movie Recommender")
-st.write("Get personalized movie and book suggestions — powered by UX + Python + Streamlit 💜")
+def extract_year(s: str) -> int | None:
+    if not s:
+        return None
+    m = re.match(r"(\d{4})", s)
+    return int(m.group(1)) if m else None
 
-# ========== User Selection ==========
-choice = st.radio("What do you want recommendations for?", ["Movies", "Books"], horizontal=True)
+@st.cache_data(ttl=60*10)
+def search_books_by_subject(subject: str, year: int, max_results: int = 20):
+    url = "https://www.googleapis.com/books/v1/volumes"
+    params = {
+        "q": f"subject:{subject}",
+        "maxResults": 40,
+        "orderBy": "relevance",
+        "key": GOOGLE_BOOKS_API_KEY,
+        "printType": "books",
+    }
+    r = requests.get(url, params=params, timeout=15)
+    r.raise_for_status()
+    items = r.json().get("items", [])
+    results = []
+    for it in items:
+        info = it.get("volumeInfo", {})
+        title = info.get("title") or "Unknown"
+        published = extract_year(info.get("publishedDate", ""))
+        if published is None or published == year:
+            results.append({"title": title, "year": published or "N/A"})
+        if len(results) >= max_results:
+            break
+    return results
 
-# ========== MOVIES ==========
-if choice == "Movies":
-    st.subheader("🎞️ Movie Recommendations")
+# ----------------------------------------------------------
+# 🧠 APP LOGIC
+# ----------------------------------------------------------
+category = st.radio("Choose category:", ["🎥 Movies", "📚 Books"], horizontal=True)
+year = st.slider("Select release year:", 1930, 2025, 2020)
 
-    genre = st.selectbox("Select a genre:", [
-        "Action", "Comedy", "Drama", "Fantasy", "Horror", "Romance", "Sci-Fi", "Thriller", "Animation"
-    ])
-
-    min_year, max_year = st.slider("Select release year range:", 1930, 2025, (2000, 2025))
-
-    if st.button("🎲 Recommend Movies"):
-        url = f"https://api.themoviedb.org/3/discover/movie?api_key={TMDB_API_KEY}&with_genres={genre}&language=en-US&sort_by=popularity.desc&primary_release_date.gte={min_year}-01-01&primary_release_date.lte={max_year}-12-31"
-
+if category == "🎥 Movies":
+    if not TMDB_API_KEY:
+        st.error("⚠️ TMDB API key not found. Please add it to your .env or Streamlit secrets.")
+    else:
         try:
-            response = requests.get(url)
-            if response.status_code == 200:
-                data = response.json()
-                movies = random.sample(data.get("results", []), k=min(5, len(data["results"])))
-                st.success(f"🎬 Movie suggestions in {genre} ({min_year}-{max_year}):")
-                for movie in movies:
-                    name = movie.get("title", "Unknown Title")
-                    year = movie.get("release_date", "Unknown Year")[:4]
-                    rating = movie.get("vote_average", "N/A")
-                    runtime = movie.get("runtime", "N/A")
-                    st.markdown(f"<div class='recommend-box'>{name} ({year}) ⭐ {rating}</div>", unsafe_allow_html=True)
-            else:
-                st.error("❌ Error fetching movies. Please check your API key or try again later.")
+            id_by_name, names = get_tmdb_genres()
+            genre_name = st.selectbox("Movie genre:", names, index=names.index("Action") if "Action" in names else 0)
+            top_n = st.selectbox("How many results?", [5, 10, 15], index=1)
+            if st.button("🎲 Recommend Movies"):
+                with st.spinner("Fetching from TMDB..."):
+                    pool = []
+                    for page in (1, 2, 3):
+                        pool += discover_movies(id_by_name[genre_name], year, page)
+                    if not pool:
+                        st.warning("No movies found for this year/genre. Try another filter.")
+                    else:
+                        picks = random.sample(pool, k=min(top_n, len(pool)))
+                        st.success(f"{len(picks)} movies for {genre_name} ({year}):")
+                        for m in picks:
+                            title = m.get("title", "Untitled")
+                            y = extract_year(m.get("release_date", "")) or year
+                            rating = m.get("vote_average", 0)
+                            st.markdown(f"<div class='card'>{title} ({y}) • ⭐ {rating}</div>", unsafe_allow_html=True)
         except Exception as e:
-            st.error(f"⚠️ Something went wrong: {e}")
+            st.error(f"Error fetching from TMDB: {e}")
 
-# ========== BOOKS ==========
+# ----------------------------------------------------------
+# 📚 BOOKS with fallback
+# ----------------------------------------------------------
 else:
-    st.subheader("📚 Book Recommendations")
+    if not GOOGLE_BOOKS_API_KEY:
+        st.error("⚠️ Google Books API key not found. Please add it to your .env or Streamlit secrets.")
+    else:
+        subject = st.selectbox("Book subject:",
+            ["Fantasy", "Mystery", "Romance", "Self-Help", "Sci-Fi", "History", "Horror", "Biography"],
+            index=0)
+        top_n = st.selectbox("How many results?", [5, 10, 15], index=1)
+        if st.button("🎲 Recommend Books"):
+            with st.spinner("Fetching from Google Books..."):
+                try:
+                    results = search_books_by_subject(subject, year, max_results=40)
+                    if not results:
+                        raise Exception("No API results")
+                except Exception:
+                    st.warning("⚠️ Google Books API unavailable — showing local suggestions instead.")
+                    fallback_books = {
+                        "Fantasy": ["Harry Potter", "The Hobbit", "Eragon", "Percy Jackson", "Game of Thrones"],
+                        "Mystery": ["Sherlock Holmes", "Gone Girl", "The Girl with the Dragon Tattoo", "Big Little Lies"],
+                        "Romance": ["Pride and Prejudice", "The Notebook", "Me Before You", "Outlander"],
+                        "Sci-Fi": ["Dune", "The Martian", "Neuromancer", "Snow Crash"],
+                        "Horror": ["It", "The Shining", "Dracula", "Frankenstein"],
+                        "Biography": ["Steve Jobs", "Becoming", "Educated", "Long Walk to Freedom"],
+                    }
+                    results = [{"title": t, "year": "N/A"} for t in fallback_books.get(subject, [])]
+                picks = results[:top_n]
+                st.success(f"{len(picks)} books for {subject} (around {year}):")
+                for b in picks:
+                    st.markdown(f"<div class='card'>{b['title']} ({b['year']})</div>", unsafe_allow_html=True)
 
-    genre = st.selectbox("Choose a genre:", [
-        "Fantasy", "Science Fiction", "Mystery", "Romance", "Horror", "Adventure", "Biography"
-    ])
-    count = st.slider("How many results?", 5, 20, 10)
-
-    if st.button("🎲 Recommend Books"):
-        st.write("Fetching books... please wait.")
-        url = f"https://www.googleapis.com/books/v1/volumes?q=subject:{genre}&maxResults={count}&key={GOOGLE_BOOKS_API_KEY}"
-
-        try:
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                books = response.json().get("items", [])
-                if books:
-                    st.success(f"✨ Books in {genre}:")
-                    for b in books:
-                        title = b["volumeInfo"].get("title", "Unknown Title")
-                        authors = ", ".join(b["volumeInfo"].get("authors", ["Unknown Author"]))
-                        st.markdown(f"<div class='recommend-box'>{title} — {authors}</div>", unsafe_allow_html=True)
-                else:
-                    st.warning("No books found. Try another genre.")
-            else:
-                raise Exception("API returned error")
-        except Exception:
-            # ========== FALLBACK MODE ==========
-            st.warning("⚠️ Google Books API unavailable — showing local suggestions instead.")
-
-            fallback_books = {
-                "Fantasy": ["Harry Potter", "The Hobbit", "Percy Jackson", "Game of Thrones", "Eragon"],
-                "Science Fiction": ["Dune", "Neuromancer", "Snow Crash", "Ender's Game", "The Martian"],
-                "Mystery": ["Sherlock Holmes", "Gone Girl", "The Girl with the Dragon Tattoo", "Big Little Lies", "In the Woods"],
-                "Romance": ["Pride and Prejudice", "Me Before You", "The Notebook", "Outlander", "Twilight"],
-                "Horror": ["It", "The Shining", "Dracula", "Frankenstein", "Bird Box"],
-                "Adventure": ["Treasure Island", "The Lost World", "Life of Pi", "Around the World in 80 Days", "Jurassic Park"],
-                "Biography": ["Steve Jobs", "Becoming", "Educated", "The Diary of a Young Girl", "Long Walk to Freedom"]
-            }
-
-            st.success(f"✨ Offline {genre} book suggestions:")
-            for title in random.sample(fallback_books.get(genre, []), k=5):
-                st.markdown(f"<div class='recommend-box'>{title}</div>", unsafe_allow_html=True)
-
-# ========== Footer ==========
+# ----------------------------------------------------------
+# 🖤 FOOTER
+# ----------------------------------------------------------
 st.markdown("---")
-st.markdown("<center>Designed by Parsa | UX + Python + Streamlit 💜</center>", unsafe_allow_html=True)
+st.markdown(
+    f"<p style='text-align:center; color:{C['border']}; font-size:14px;'>Designed by Parsa | UX + Python + Streamlit 💜</p>",
+    unsafe_allow_html=True
+)
