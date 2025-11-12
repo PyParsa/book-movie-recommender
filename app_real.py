@@ -1,5 +1,5 @@
 # ==========================================================
-# 🎬 Book & Movie Recommender App (Final Hybrid Version)
+# 🎬 Book & Movie Recommender App (Final Hybrid + Proxy)
 # Designed by Parsa | UX + Python + Streamlit 💜
 # ==========================================================
 
@@ -14,8 +14,7 @@ from dotenv import load_dotenv
 # 🔐 LOAD ENVIRONMENT VARIABLES
 # ----------------------------------------------------------
 load_dotenv()
-TMDB_API_KEY = os.getenv("TMDB_API_KEY")
-GOOGLE_BOOKS_API_KEY = os.getenv("GOOGLE_BOOKS_API_KEY")
+PROXY_URL = "https://recommender-proxy-production.up.railway.app"  # ← آدرس سرور Railway تو
 
 # ----------------------------------------------------------
 # ⚙️ STREAMLIT CONFIG
@@ -78,7 +77,7 @@ st.markdown(f"""
 c1, c2 = st.columns([6,1])
 with c1:
     st.title("🎬 Real Book & Movie Recommender")
-    st.caption("Powered by TMDB & Google Books APIs")
+    st.caption("Powered by TMDB & Google Books APIs via Proxy 🌍")
 with c2:
     if st.button("🌙" if st.session_state.dark_mode else "☀️"):
         st.session_state.dark_mode = not st.session_state.dark_mode
@@ -88,20 +87,23 @@ with c2:
 # ----------------------------------------------------------
 @st.cache_data(ttl=60*60)
 def get_tmdb_genres():
-    url = f"https://api.themoviedb.org/3/genre/movie/list"
-    params = {"api_key": TMDB_API_KEY, "language": "en-US"}
+    """دریافت ژانر فیلم‌ها از طریق Proxy"""
+    url = f"{PROXY_URL}/tmdb/discover"
+    params = {"endpoint": "genre/movie/list", "language": "en-US"}
     r = requests.get(url, params=params, timeout=15)
     r.raise_for_status()
-    genres = r.json().get("genres", [])
+    data = r.json()
+    genres = data.get("genres", [])
     id_by_name = {g["name"]: g["id"] for g in genres}
     names_sorted = sorted(id_by_name.keys())
     return id_by_name, names_sorted
 
+
 @st.cache_data(ttl=60*10)
 def discover_movies(genre_id: int, year: int, page: int = 1):
-    url = "https://api.themoviedb.org/3/discover/movie"
+    """کشف فیلم‌ها از طریق Proxy"""
+    url = f"{PROXY_URL}/tmdb/discover"
     params = {
-        "api_key": TMDB_API_KEY,
         "with_genres": genre_id,
         "primary_release_year": year,
         "language": "en-US",
@@ -113,20 +115,22 @@ def discover_movies(genre_id: int, year: int, page: int = 1):
     r.raise_for_status()
     return r.json().get("results", [])
 
+
 def extract_year(s: str) -> int | None:
     if not s:
         return None
     m = re.match(r"(\d{4})", s)
     return int(m.group(1)) if m else None
 
+
 @st.cache_data(ttl=60*10)
 def search_books_by_subject(subject: str, year: int, max_results: int = 20):
-    url = "https://www.googleapis.com/books/v1/volumes"
+    """جستجوی کتاب از طریق Proxy"""
+    url = f"{PROXY_URL}/books/search"
     params = {
         "q": f"subject:{subject}",
         "maxResults": 40,
         "orderBy": "relevance",
-        "key": GOOGLE_BOOKS_API_KEY,
         "printType": "books",
     }
     r = requests.get(url, params=params, timeout=15)
@@ -150,63 +154,57 @@ category = st.radio("Choose category:", ["🎥 Movies", "📚 Books"], horizonta
 year = st.slider("Select release year:", 1930, 2025, 2020)
 
 if category == "🎥 Movies":
-    if not TMDB_API_KEY:
-        st.error("⚠️ TMDB API key not found. Please add it to your .env or Streamlit secrets.")
-    else:
-        try:
-            id_by_name, names = get_tmdb_genres()
-            genre_name = st.selectbox("Movie genre:", names, index=names.index("Action") if "Action" in names else 0)
-            top_n = st.selectbox("How many results?", [5, 10, 15], index=1)
-            if st.button("🎲 Recommend Movies"):
-                with st.spinner("Fetching from TMDB..."):
-                    pool = []
-                    for page in (1, 2, 3):
-                        pool += discover_movies(id_by_name[genre_name], year, page)
-                    if not pool:
-                        st.warning("No movies found for this year/genre. Try another filter.")
-                    else:
-                        picks = random.sample(pool, k=min(top_n, len(pool)))
-                        st.success(f"{len(picks)} movies for {genre_name} ({year}):")
-                        for m in picks:
-                            title = m.get("title", "Untitled")
-                            y = extract_year(m.get("release_date", "")) or year
-                            rating = m.get("vote_average", 0)
-                            st.markdown(f"<div class='card'>{title} ({y}) • ⭐ {rating}</div>", unsafe_allow_html=True)
-        except Exception as e:
-            st.error(f"Error fetching from TMDB: {e}")
+    try:
+        id_by_name, names = get_tmdb_genres()
+        genre_name = st.selectbox("Movie genre:", names, index=names.index("Action") if "Action" in names else 0)
+        top_n = st.selectbox("How many results?", [5, 10, 15], index=1)
+        if st.button("🎲 Recommend Movies"):
+            with st.spinner("Fetching from TMDB (via Proxy)..."):
+                pool = []
+                for page in (1, 2, 3):
+                    pool += discover_movies(id_by_name[genre_name], year, page)
+                if not pool:
+                    st.warning("No movies found for this year/genre. Try another filter.")
+                else:
+                    picks = random.sample(pool, k=min(top_n, len(pool)))
+                    st.success(f"{len(picks)} movies for {genre_name} ({year}):")
+                    for m in picks:
+                        title = m.get("title", "Untitled")
+                        y = extract_year(m.get("release_date", "")) or year
+                        rating = m.get("vote_average", 0)
+                        st.markdown(f"<div class='card'>{title} ({y}) • ⭐ {rating}</div>", unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f"Error fetching from Proxy/TMDB: {e}")
 
 # ----------------------------------------------------------
-# 📚 BOOKS with fallback
+# 📚 BOOKS
 # ----------------------------------------------------------
 else:
-    if not GOOGLE_BOOKS_API_KEY:
-        st.error("⚠️ Google Books API key not found. Please add it to your .env or Streamlit secrets.")
-    else:
-        subject = st.selectbox("Book subject:",
-            ["Fantasy", "Mystery", "Romance", "Self-Help", "Sci-Fi", "History", "Horror", "Biography"],
-            index=0)
-        top_n = st.selectbox("How many results?", [5, 10, 15], index=1)
-        if st.button("🎲 Recommend Books"):
-            with st.spinner("Fetching from Google Books..."):
-                try:
-                    results = search_books_by_subject(subject, year, max_results=40)
-                    if not results:
-                        raise Exception("No API results")
-                except Exception:
-                    st.warning("⚠️ Google Books API unavailable — showing local suggestions instead.")
-                    fallback_books = {
-                        "Fantasy": ["Harry Potter", "The Hobbit", "Eragon", "Percy Jackson", "Game of Thrones"],
-                        "Mystery": ["Sherlock Holmes", "Gone Girl", "The Girl with the Dragon Tattoo", "Big Little Lies"],
-                        "Romance": ["Pride and Prejudice", "The Notebook", "Me Before You", "Outlander"],
-                        "Sci-Fi": ["Dune", "The Martian", "Neuromancer", "Snow Crash"],
-                        "Horror": ["It", "The Shining", "Dracula", "Frankenstein"],
-                        "Biography": ["Steve Jobs", "Becoming", "Educated", "Long Walk to Freedom"],
-                    }
-                    results = [{"title": t, "year": "N/A"} for t in fallback_books.get(subject, [])]
-                picks = results[:top_n]
-                st.success(f"{len(picks)} books for {subject} (around {year}):")
-                for b in picks:
-                    st.markdown(f"<div class='card'>{b['title']} ({b['year']})</div>", unsafe_allow_html=True)
+    subject = st.selectbox("Book subject:",
+        ["Fantasy", "Mystery", "Romance", "Self-Help", "Sci-Fi", "History", "Horror", "Biography"],
+        index=0)
+    top_n = st.selectbox("How many results?", [5, 10, 15], index=1)
+    if st.button("🎲 Recommend Books"):
+        with st.spinner("Fetching from Google Books (via Proxy)..."):
+            try:
+                results = search_books_by_subject(subject, year, max_results=40)
+                if not results:
+                    raise Exception("No API results")
+            except Exception:
+                st.warning("⚠️ API unavailable — showing fallback results instead.")
+                fallback_books = {
+                    "Fantasy": ["Harry Potter", "The Hobbit", "Eragon", "Percy Jackson", "Game of Thrones"],
+                    "Mystery": ["Sherlock Holmes", "Gone Girl", "The Girl with the Dragon Tattoo", "Big Little Lies"],
+                    "Romance": ["Pride and Prejudice", "The Notebook", "Me Before You", "Outlander"],
+                    "Sci-Fi": ["Dune", "The Martian", "Neuromancer", "Snow Crash"],
+                    "Horror": ["It", "The Shining", "Dracula", "Frankenstein"],
+                    "Biography": ["Steve Jobs", "Becoming", "Educated", "Long Walk to Freedom"],
+                }
+                results = [{"title": t, "year": "N/A"} for t in fallback_books.get(subject, [])]
+            picks = results[:top_n]
+            st.success(f"{len(picks)} books for {subject} (around {year}):")
+            for b in picks:
+                st.markdown(f"<div class='card'>{b['title']} ({b['year']})</div>", unsafe_allow_html=True)
 
 # ----------------------------------------------------------
 # 🖤 FOOTER
