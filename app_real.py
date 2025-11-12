@@ -88,8 +88,8 @@ with c2:
 @st.cache_data(ttl=60*60)
 def get_tmdb_genres():
     """دریافت ژانر فیلم‌ها از طریق Proxy"""
-    url = f"{PROXY_URL}/tmdb/discover"
-    params = {"endpoint": "genre/movie/list", "language": "en-US"}
+    url = f"{PROXY_URL}/tmdb/genres"
+    params = {"language": "en-US"}
     r = requests.get(url, params=params, timeout=15)
     r.raise_for_status()
     data = r.json()
